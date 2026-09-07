@@ -4,8 +4,8 @@
 
 `noctalia-taildrop` is a small, standalone [Noctalia](https://noctalia.dev) plugin. Right-click a
 file, pick a device, confirm, and Tailscale copies it across. It does **not** replace your
-Tailscale frontend — install `davemhammer/tailscale` (or any Tailscale plugin) separately if you
-want the VPN manager / peers / exit-node UI.
+Tailscale frontend — install a Tailscale plugin separately if you want the VPN manager / peers /
+exit-node UI.
 
 It ships a purpose-built **send dialog** — a single Noctalia panel that lists eligible Taildrop
 destinations and requires an explicit confirm before anything leaves your machine.

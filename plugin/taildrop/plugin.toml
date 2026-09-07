@@ -1,8 +1,8 @@
 # Taildrop: send a file to a device on the tailnet from a file manager.
 #
 # This is a standalone, single-purpose plugin. It does NOT replace the full
-# Tailscale frontend — install `davemhammer/tailscale` (or any Tailscale plugin)
-# separately if you want the VPN manager / peers / exit-node UI.
+# Tailscale frontend — install a Tailscale plugin separately if you want the
+# VPN manager / peers / exit-node UI.
 
 id = "carlocamacho/taildrop"
 name = "Taildrop"

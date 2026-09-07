@@ -20,8 +20,8 @@ Open the send dialog from anywhere with:
 noctalia msg panel-toggle carlocamacho/taildrop:send
 ```
 
-> This plugin is **not** a Tailscale frontend. Install `davemhammer/tailscale` (or any
-> Tailscale plugin) separately if you want the VPN manager / peers / exit-node UI.
+> This plugin is **not** a Tailscale frontend. Install a Tailscale plugin separately if you
+> want the VPN manager / peers / exit-node UI.
 
 ## Requirements
 
