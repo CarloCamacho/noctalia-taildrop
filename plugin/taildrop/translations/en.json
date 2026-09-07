@@ -17,7 +17,6 @@
     "files": "Sending {n} item(s)",
     "loading": "Finding eligible devices…",
     "pick": "Choose a device to send to:",
-    "pick_intro": "Send files (or folders, archived to .tar.gz) to a device on your tailnet.",
     "retry": "Retry",
     "select": "Select a device",
     "send_to": "Send to {name}",

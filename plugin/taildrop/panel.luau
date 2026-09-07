@@ -173,8 +173,6 @@ local function render()
       ui.button({ glyph = "close", variant = "ghost", onClick = "onClosePanel" }),
     }),
 
-    ui.label({ text = tr("send.pick_intro"), color = "on_surface_variant", fontSize = 11, maxLines = 2 }),
-
     ui.column({ gap = 4, align = "stretch" }, filesRows()),
     ui.label({ text = "", fontSize = 4 }),
 
