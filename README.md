@@ -1,11 +1,14 @@
 # noctalia-taildrop
 
-**Send a file to any machine on your tailnet straight from HyprFM's right-click menu**
+**Send a file to any machine on your tailnet straight from a file manager's right-click menu.**
 
-`noctalia-taildrop` adds a **"Send via Taildrop…"** action to HyprFM. Right-click a
-file, pick a device, confirm, and Tailscale copies it across. It reuses the Tailscale
-plugin's own panel as a device picker, so you get an honest destination list and a
-confirmation step before anything leaves your machine.
+`noctalia-taildrop` is a small, standalone [Noctalia](https://noctalia.dev) plugin. Right-click a
+file, pick a device, confirm, and Tailscale copies it across. It does **not** replace your
+Tailscale frontend — install `davemhammer/tailscale` (or any Tailscale plugin) separately if you
+want the VPN manager / peers / exit-node UI.
+
+It ships a purpose-built **send dialog** — a single Noctalia panel that lists eligible Taildrop
+destinations and requires an explicit confirm before anything leaves your machine.
 
 > Files only, by design — `tailscale file cp` does not support directories (see
 > [Limitations](#limitations)).
@@ -18,11 +21,12 @@ confirmation step before anything leaves your machine.
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Installation](#installation)
-  - [1. Install the Tailscale plugin (override)](#1-install-the-tailscale-plugin-override)
+  - [1. Install the plugin](#1-install-the-plugin)
   - [2. Install the bridge helper](#2-install-the-bridge-helper)
-  - [3. Wire up the HyprFM context menu](#3-wire-up-the-hyprfm-context-menu)
+  - [3. Wire up a file manager](#3-wire-up-a-file-manager)
   - [4. Grant the Tailscale daemon operator (one-time)](#4-grant-the-tailscale-daemon-operator-one-time)
 - [Usage](#usage)
+- [File managers](#file-managers)
 - [IPC contract](#ipc-contract)
 - [Troubleshooting](#troubleshooting)
 - [Limitations](#limitations)
@@ -35,52 +39,51 @@ confirmation step before anything leaves your machine.
 
 | From | Outcome |
 | --- | --- |
-| HyprFM right-click → **Send via Taildrop…** | Opens the Tailscale panel with the file pre-loaded |
-| In the panel | Choose an eligible device, review file + destination, confirm |
+| File manager right-click → **Send via Taildrop…** | Opens the Taildrop send dialog with your file(s) pre-loaded |
+| In the dialog | Choose an eligible device, review file(s) + destination, confirm |
 | After confirm | Runs `tailscale file cp <file> <device>:` and shows the result |
 | Folders | Not supported — you get a clear notification instead of a silent no-op |
 
 ## How it works
 
 ```text
-HyprFM right-click
-  └─ runs noctalia-taildrop %f            (one helper per selected file)
-       └─ validates the path, builds a structured request
-            └─ `noctalia msg plugin davemhammer/tailscale:service all taildrop_send '<json>'`
-                 └─ Tailscale service validates + records a `ts_transfer` job
-                      └─ opens the Tailscale panel (Send tab)
+File manager right-click
+  └─ runs noctalia-taildrop <file> [more files...]     (one helper per action)
+       └─ validates each path (no shell), builds a structured request
+            └─ `noctalia msg plugin carlocamacho/taildrop:service all taildrop_send '<json>'`
+            └─ `noctalia msg panel-open carlocamacho/taildrop:send`   (always shows the dialog)
+                 └─ service records a `taildrop_transfer` job
+                      └─ the send dialog lists eligible destinations
                            └─ you pick a device and confirm
                                 └─ service runs `tailscale file cp <file> <device>:`
 ```
 
-- The helper never shells out — the path crosses the boundary as a discrete argv
-  element and a JSON payload, so filenames with spaces / quotes / newlines survive.
-- The picker lists only **eligible** Taildrop destinations (from `tailscale file cp --targets`),
+- The bridge never shells out — paths cross the boundary as discrete argv elements and a JSON
+  payload, so filenames with spaces / quotes / newlines survive intact.
+- The dialog lists only **eligible** Taildrop destinations (from `tailscale file cp --targets`),
   not every peer on the tailnet.
+- The dialog is opened with `noctalia msg panel-open`, which is **non-toggle** — so a second
+  send brings the already-open dialog forward instead of closing it.
 
 ## Requirements
 
 - [Tailscale](https://tailscale.com/download) CLI (`tailscale` on `PATH`, daemon running)
-- [Noctalia](https://noctalia.dev) with the `davemhammer/tailscale` plugin
-- Optional but the whole point: **HyprFM** (or any file manager that passes a path like `%f`)
+- [Noctalia](https://noctalia.dev)
+- Optional but the whole point: a file manager (HyprFM, Nautilus, Dolphin, Thunar, …)
 - `python3` for the bridge helper
 - The local user must be a **Tailscale daemon operator** (see step 4)
 
 ## Installation
 
-> The bundled Tailscale plugin keeps its original id `davemhammer/tailscale`, so it
-> is a **drop-in override** of the community version. It deliberately replaces the
-> plugin so the Send tab appears inside the panel you already use.
+### 1. Install the plugin
 
-### 1. Install the Tailscale plugin (override)
-
-The modified plugin lives at [`plugin/tailscale/`](plugin/tailscale). Copy it into a
-Noctalia **path source** directory — the folder name must match the plugin's id suffix:
+Copy the plugin into a Noctalia **path source** directory. The folder name must match the
+plugin's name suffix (`taildrop`):
 
 ```sh
 # Example: reuse the `carlo-local` path source already used for other plugins
-mkdir -p ~/noctalia-sources/tailscale
-cp -a plugin/tailscale/. ~/noctalia-sources/tailscale/
+mkdir -p ~/noctalia-sources/taildrop
+cp -a plugin/taildrop/. ~/noctalia-sources/taildrop/
 ```
 
 If you don't have a path source yet, register one (or edit `~/.config/noctalia/settings.toml`):
@@ -92,13 +95,12 @@ location = "/home/you/noctalia-sources"
 name = "local"
 ```
 
-Then enable the plugin and confirm it loads from your path source:
+Then enable the plugin and confirm it loads:
 
 ```sh
-noctalia msg plugins disable davemhammer/tailscale
-noctalia msg plugins enable davemhammer/tailscale
-noctalia msg plugins list | grep tailscale
-# expect: davemhammer/tailscale [local] 1.0.6 enabled ...
+noctalia msg plugins enable carlocamacho/taildrop
+noctalia msg plugins list | grep taildrop
+# expect: carlocamacho/taildrop [local] 1.0.0 enabled requires tailscale
 ```
 
 > Editing `panel.luau` / `service.luau` in the path-source folder hot-reloads those
@@ -110,30 +112,13 @@ noctalia msg plugins list | grep tailscale
 install -m 755 bin/noctalia-taildrop ~/.local/bin/noctalia-taildrop
 ```
 
-Confirm it works and the path is on `PATH` for HyprFM (use the absolute path in step 3
-if `~/.local/bin` isn't on HyprFM's `PATH`).
+Confirm it works and the path is on `PATH` for your file manager (use the absolute path in
+step 3 if `~/.local/bin` isn't on the manager's `PATH`).
 
-### 3. Wire up the HyprFM context menu
+### 3. Wire up a file manager
 
-Append the block from [`hyprfm/context-menu.toml`](hyprfm/context-menu.toml) to `~/.config/hyprfm/config.toml`:
-
-```toml
-[context_menu]
-
-[[context_menu.actions]]
-name = "Send via Taildrop…"
-command = "/home/you/.local/bin/noctalia-taildrop %f"
-types = ["*"]
-```
-
-Restart HyprFM. Back up your config first:
-
-```sh
-cp ~/.config/hyprfm/config.toml ~/.config/hyprfm/config.toml.bak
-```
-
-> HyprFM runs the action **once per selected file** and passes the path via `%f` as a
-> discrete argv element (no shell). Multi-selecting therefore opens one picker per file.
+Pick your manager below and follow its example. **HyprFM**, **Nautilus**, **Dolphin**, and
+**Thunar** examples live in [`integration/`](integration/).
 
 ### 4. Grant the Tailscale daemon operator (one-time)
 
@@ -144,38 +129,57 @@ cp ~/.config/hyprfm/config.toml ~/.config/hyprfm/config.toml.bak
 sudo tailscale set --operator=$USER
 ```
 
-This is a local daemon setting; it does **not** change tailnet policy or who may
-receive files.
+This is a local daemon setting; it does **not** change tailnet policy or who may receive files.
 
 ## Usage
 
-1. Right-click a file in HyprFM → **Send via Taildrop…**
-2. The Tailscale panel opens on the **Send to device** tab with your file listed.
-3. Pick a destination (online devices first; offline ones are shown but may fail).
-4. Confirm — the destination + filename are visible before you send.
-5. A notification reports success or a real CLI error.
+1. Right-click a file → **Send via Taildrop…**
+2. The send dialog lists the file(s) and the eligible destinations (online first).
+3. Pick a destination; the destination + filename(s) are visible before you send.
+4. Confirm — a notification reports success or a real CLI error.
+
+## File managers
+
+The bridge accepts **one or more** absolute path arguments. Pass all selected files at once
+where the manager supports it, so a multi-select becomes a single dialog:
+
+| Manager | Selected files placeholder | How it passes them |
+| --- | --- | --- |
+| HyprFM | `%f` | One invocation per selected item (the helper coalesces into one dialog) |
+| Nautilus | `$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS` | All selected paths in one invocation |
+| Dolphin | `%F` (or `%f`) | All selected files (`%F`) in one invocation |
+| Thunar | `%f` | One invocation per selected item |
+
+> If your manager passes one file per invocation, multiple selections still work — the plugin
+> coalesces concurrent requests that arrive within a moment into a single dialog.
 
 ## IPC contract
 
-The bridge talks to the Tailscale service over Noctalia's `msg plugin` channel.
-See [docs/ipc-contract.md](docs/ipc-contract.md) for the full spec.
+The bridge talks to the service over Noctalia's `msg plugin` channel and opens the dialog with
+`msg panel-open`. See [docs/ipc-contract.md](docs/ipc-contract.md) for the full spec.
 
-**Request** (helper → service):
+**Request** (bridge → service):
 
 ```
-noctalia msg plugin davemhammer/tailscale:service all taildrop_send '<json>'
+noctalia msg plugin carlocamacho/taildrop:service all taildrop_send '<json>'
 ```
 
 ```json
-{ "v": 1, "requestId": "<uuid>", "paths": ["/abs/path"], "origin": "hyprfm" }
+{ "v": 1, "requestId": "<uuid>", "paths": ["/abs/path", "/abs/path2"], "origin": "file_manager" }
 ```
 
-**Shared job** (state key `ts_transfer`): `requestId`, `paths`, `target`, `phase`
-(`choosing|confirming|sending|succeeded|failed|cancelled`), `status`, `error`,
-`eligible`, timestamps, `revision`.
+**Open the dialog** (bridge → Noctalia, non-toggle):
 
-The service rejects requests that are malformed, non-absolute, or point at a
-directory — bounds are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path).
+```
+noctalia msg panel-open carlocamacho/taildrop:send
+```
+
+**Shared job** (state key `taildrop_transfer`): `requestId`, `paths`, `target`, `phase`
+(`choosing|confirming|sending|succeeded|failed|cancelled`), `status`, `error`, `eligible`,
+timestamps, `revision`.
+
+The service rejects requests that are malformed, non-absolute, or point at a directory — bounds
+are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path).
 
 ## Troubleshooting
 
@@ -183,21 +187,19 @@ directory — bounds are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path)
 | --- | --- |
 | `Access denied: file access denied` when sending | Run `sudo tailscale set --operator=$USER` once |
 | Folder right-click does nothing / shows a notice | Folders aren't supported by `tailscale file cp`; archive it first |
-| Panel opens but no devices listed | `tailscale file cp --targets` returned nothing (no eligible devices, or daemon down) |
-| "Send via Taildrop…" not in the HyprFM menu | Restart HyprFM; confirm the config block and helper path |
-| Plugin not loaded from your copy | Check `noctalia msg plugins list` shows your path source, not `community` |
+| Dialog opens but no devices listed | `tailscale file cp --targets` returned nothing (no eligible devices, or daemon down) |
+| "Send via Taildrop…" not in the menu | Restart the file manager; confirm the config block and helper path |
+| Plugin not loaded from your copy | Check `noctalia msg plugins list` shows your path source, and the folder is named `taildrop` |
 | Helper exits 1 with a message on stderr | Look at the message (missing/relative/unreadable path) |
+| Dialog opens from a bare `msg plugin` call but not with the helper | Only the bridge helper runs `msg panel-open`; call it directly if you invoke the plugin by hand |
 
 ## Limitations
 
-- **Files only.** `tailscale file cp` rejects directories. A future v2 could
-  archive-on-send (send `folder.tar.gz`) or delegate to `tailscale file cp` with a
-  pre-archived path.
-- **One file per invocation.** HyprFM runs the action once per selected item, so
-  multi-select spawns a picker per file (documented, not batched).
+- **Files only.** `tailscale file cp` rejects directories. A future v2 could archive-on-send
+  (send `folder.tar.gz`).
 - **No receive flow.** Receiving (`tailscale file get`) is out of scope for this repo.
-- Offline/`offline, last seen …` peers are listed but a send may fail; eligibility is
-  the CLI's call, not the plugin's.
+- Offline/`offline, last seen …` peers are listed but a send may fail; eligibility is the CLI's
+  call, not the plugin's.
 
 ## Development
 
@@ -209,20 +211,15 @@ python3 -m unittest -v tests.test_bridge
 Layout:
 
 ```text
-plugin/tailscale/   modified davemhammer/tailscale plugin (service, panel, translations)
-bin/                the noctalia-taildrop bridge helper
-hyprfm/             sample context-menu config block
-docs/               the IPC contract
-tests/              bridge tests
+plugin/taildrop/   standalone Noctalia plugin (service, send dialog, translations)
+bin/               the noctalia-taildrop bridge helper
+hyprfm/            sample HyprFM context-menu config block
+integration/       samples for Nautilus, Dolphin, Thunar
+docs/              the IPC contract
+tests/             bridge tests
 ```
-
-Upstream contribution: the plugin-side changes are intended for
-[`noctalia-dev/community-plugins`](https://github.com/noctalia-dev/community-plugins)
-under `tailscale/`. This repo bundles them as a self-contained override and adds the
-HyprFM bridge + docs; the plan is to contribute the service/panel/translation changes
-upstream and keep this repo as the integration/distribution point.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The bundled Tailscale plugin is a modified copy of
-`davemhammer/tailscale` (MIT, © its authors). Not affiliated with Noctalia or Tailscale.
+MIT — see [LICENSE](LICENSE). Noctalia is a registered trademark of its respective owners; this
+project is not affiliated with or endorsed by Noctalia or Tailscale.

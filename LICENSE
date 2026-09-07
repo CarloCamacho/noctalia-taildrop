@@ -22,8 +22,5 @@ SOFTWARE.
 
 ---
 
-The bundled Tailscale plugin under `plugin/tailscale/` is a modified copy of
-`davemhammer/tailscale` from the Noctalia community-plugins repository, which is
-also distributed under the MIT License (© its original authors). Noctalia is a
-registered trademark of its respective owners; this project is not affiliated
-with or endorsed by Noctalia or Tailscale.
+Noctalia is a registered trademark of its respective owners. This project is
+not affiliated with or endorsed by Noctalia or Tailscale.

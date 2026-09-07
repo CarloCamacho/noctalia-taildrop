@@ -1,75 +1,60 @@
-# Taildrop Send-Request IPC Contract
+# Taildrop IPC Contract
 
-> Shared interface between the **Tailscale plugin** (`davemhammer/tailscale`) and
-> external callers (currently HyprFM). This is a **design decision**, not an
-> implementation. Nothing here is deployed or changed yet.
-
-## Decision: use Noctalia `msg plugin` event IPC with a structured JSON payload
-
-The primary channel for handing file paths into the plugin is **Noctalia's existing
-`noctalia msg plugin` IPC**, carrying a small JSON payload on the `[payload]`
-argument. A private **request file** is kept only as a documented fallback (see below),
-**not** the primary mechanism.
-
-### Why this is viable (verified against the installed setup)
-
-- `noctalia msg plugin <id:entry> <target> <event> [payload]` dispatches to the
-  plugin entry's Lua `onIpc(event, payload)`. This is the terminal point for every
-  `msg plugin` call.
-- The `payload` argument is delivered as either a **string** or a **decoded table**.
-  First-party plugins already read object fields from it:
-  - `noctalia/bitwarden` `onIpc` reads `payload.password`, `payload.id`, `payload.mode`,
-    `payload.clientId` (`if type(payload) == "table" then …`).
-  - `yuuto/arch-updater` `onIpc` reads `payload.pkg`, `payload.at` (`type(payload)=="table"`).
-  - `davemhammer/tailscale` already does `type(payload)=="table" and payload.action`.
-- A plugin **service can open its own panel** with `noctalia.togglePanel("<id>:<entry>")`
-  (used by bitwarden for `open_panel`), so the helper only needs a single trigger call.
-
-The one thing to confirm before coding is empirical: the exact decoding semantics of
-the `msg` `payload` argument (does a JSON object always arrive as a table?). See
-**Task 0** below.
-
----
+> The interface between the **Taildrop plugin** (`carlocamacho/taildrop`) and
+> external callers (file managers). It is intentionally small: one request, one
+> shared job, and a handful of actions.
 
 ## Transport
 
-### Helper → service (one call, no shell)
+### Bridge helper → service (one call, no shell)
 
 ```sh
-noctalia msg plugin davemhammer/tailscale:service all taildrop_send '<json>'
+noctalia msg plugin carlocamacho/taildrop:service all taildrop_send '<json>'
 ```
 
-The helper (Python) builds `json` with `json.dumps(...)` and passes it as a **single
-argv element** via `subprocess.run([...], shell=False)`. **Never** build this string
-in a shell. Noctalia decodes it into `payload`.
+The bridge helper (Python) builds `json` with `json.dumps(...)` and passes it as
+a single argv element via `subprocess.run([...], shell=False)`. Noctalia decodes
+it into `payload`.
+
+### Bridge helper → open the dialog
+
+```sh
+noctalia msg panel-open carlocamacho/taildrop:send
+```
+
+`panel-open` is a **non-toggle** open: it opens the dialog if it is closed and
+brings it forward if it is already open. This is deliberate — the plugin service
+does **not** call `noctalia.togglePanel` (the only panel call available to
+plugins), which would close an already-open dialog.
 
 ### Event name
 
-`taildrop_send` — namespaced to avoid colliding with the plugin's existing
-`refresh` / `up` / `down` / `toggle` events and its `payload.action` fallthrough.
+`taildrop_send` — namespaced to avoid colliding with anything else in the
+plugin's `onIpc` (there is nothing else in this plugin, but it keeps the contract
+extensible).
 
 ---
 
-## Request schema (client → service)
+## Request schema (bridge → service)
 
-Delivered as `onIpc("taildrop_send", payload)` where `payload` is the decoded table.
+Delivered as `onIpc("taildrop_send", payload)` where `payload` is the decoded
+table.
 
 | Field | Type | Rules |
 | --- | --- | --- |
 | `v` | int | `= 1` (contract version) |
-| `requestId` | string | ASCII `[A-Za-z0-9._-]`, length 1..64, unique per request; used only for correlation |
-| `paths` | string[] | 1..32 entries; each an **absolute** local path, ≤4096 bytes |
-| `origin` | string (optional) | `"hyprfm"` — informational only, not trusted |
+| `requestId` | string | ASCII `[A-Za-z0-9._-]`, length 1..64, unique per request; correlation only |
+| `paths` | string[] | 1..32 entries; each an **absolute**, **regular-file** path, ≤4096 bytes |
+| `origin` | string (optional) | informational, not trusted (bridge sends `"file_manager"`) |
 
-**Bounds (validate in the service):** total JSON ≤ 8 KiB; `paths` count ≤ 32.
-Reject anything outside these limits without opening a panel.
+**Bounds (validated in the service):** `paths` count ∈ `1..32`, total JSON ≤ 8 KiB.
+Reject anything outside these limits without opening a dialog.
 
 ---
 
-## Transfer job (shared state, key `ts_transfer`)
+## Transfer job (shared state, key `taildrop_transfer`)
 
-The plugin writes a **shared job** that both the panel and the service read. This is
-the "request ID + structured file payload + phase" state the plans require.
+The service writes a shared job that the dialog watches.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -77,89 +62,74 @@ the "request ID + structured file payload + phase" state the plans require.
 | `paths` | string[] | validated absolute paths |
 | `target` | string | `""` until the user picks; then `<hostname or ip>` |
 | `phase` | enum | `choosing` \| `confirming` \| `sending` \| `succeeded` \| `failed` \| `cancelled` |
-| `status` | string | human status line (never a fake percentage) |
+| `status` | string | human status line |
 | `error` | string | populated on `failed` |
-| `eligible` | array | targets from `tailscale file cp --targets`: `{name, ip, online}` |
+| `eligible` | array | `tailscale file cp --targets`: `{name, ip, online}` |
 | `createdAt` / `updatedAt` | number | epoch seconds |
-| `revision` | number | bumped on every write so the panel can detect change |
+| `revision` | number | bumped on every write so the dialog can detect change |
 
 ---
 
 ## Flow
 
-1. **Helper** validates the file: absolute path, exists, is a regular file, readable.
-   (Paths are never passed on a shell command line.)
-2. Helper builds the request JSON and calls `noctalia msg plugin … all taildrop_send '<json>'`.
+1. **Bridge** validates each path (absolute, exists, is a regular file, readable).
+   Paths are never placed on a shell command line.
+2. Bridge builds the request JSON and calls `noctalia msg plugin … all taildrop_send '<json>'`,
+   then `noctalia msg panel-open …` to surface the dialog.
 3. **Service** `onIpc("taildrop_send", payload)`:
    - Decode `payload` if it arrives as a string (`noctalia.json.decode`).
-   - Validate fields and bounds; on failure, set a clear error and **do not** open a panel.
-   - On success: write `ts_transfer` (phase=`choosing`, `eligible` from
-     `tailscale file cp --targets`), then `noctalia.togglePanel("davemhammer/tailscale:manager")`.
-4. **Panel** watches `ts_transfer`. If a job is active, render "Send N file(s) →" with
-   the eligible-target list. User selects a target → `phase=confirming`, showing the
-   destination and the filename(s) plus a confirm/cancel.
-5. **Confirm** → panel sends `send("taildrop_confirm", { requestId, target })` (existing
-   `ts_command` state watch).
-6. **Service** `executeAction` for `taildrop_confirm`:
-   - Re-validate that each path still exists, is a regular file, and has not changed size.
-   - Run `tailscale file cp <paths…> <target>:` as an argv vector through the existing
-     `runAction` / `runTs` (which shell-quotes each element; **no raw concatenation**).
-   - `phase=sending` → `succeeded` / `failed`; notify the outcome; set `ts_action_result`.
-7. **Cancel** → `phase=cancelled`; clear the active job.
+   - Validate fields and bounds; on failure notify and **do not** touch the dialog.
+   - If an active job is still `choosing`/`confirming` and was created within the
+     last 2 seconds, **coalesce**: merge the new paths in and refresh state (this
+     turns a file manager that fires once-per-file into one dialog). Otherwise
+     start a fresh job and fetch eligible targets from `tailscale file cp --targets`.
+4. **Dialog** watches `taildrop_transfer`. If a job is active it renders the file
+   list + eligible destinations. The user selects a destination → confirm/cancel.
+5. **Confirm** → dialog sets `taildrop_command = { action = "taildrop_confirm", jobId, target }`.
+6. **Service** `taildrop_confirm`:
+   - Re-validate each path still exists; abort with a clear error otherwise.
+   - Run `tailscale file cp <paths…> <target>:` as an argv vector (each element
+     shell-quoted; no raw concatenation).
+   - `phase=sending` → `succeeded`/`failed`; notify; bump `taildrop_transfer`.
+7. **Cancel** → `phase=cancelled`; **Done** → `phase` cleared (job emptied) and
+   the dialog closes.
 
 ---
 
 ## Security invariants
 
-- **No shell** anywhere: the helper uses `subprocess` with an argv list; the service
-  builds argv with its existing `shellCommand` (quotes each element) for `noctalia.runAsync`.
+- **No shell** anywhere: the bridge uses `subprocess` with an argv list; the
+  service builds argv with `shellQuote`/`shellCommand` and `noctalia.runAsync`.
 - Paths are **data**, never interpolated into a command string.
-- Payload is bounded; non-table / over-limit / empty-path / non-absolute / non-regular-file
+- Payload is bounded; non-table / over-limit / non-absolute / non-regular-file
   requests are rejected without side effects.
 - `requestId` is charset/length-validated and used only for correlation.
-- Eligibility comes from `tailscale file cp --targets`; **no tailnet permission changes**
-  are made to make a destination appear.
+- Eligibility comes from `tailscale file cp --targets`; no tailnet permission
+  change makes a destination appear.
 
 ---
 
-## Fallback: private request file (only if `msg` payload can't be made reliable)
+## Environment note
 
-- Path: `<state dir or XDG_RUNTIME_DIR>/noctalia-taildrop/<requestId>.json`, mode `0600`,
-  owned by the invoking user, max 8 KiB, exactly one JSON object.
-- Helper writes the file, then runs `noctalia msg plugin … all taildrop_send '<requestId>'`
-  (bare event, no payload). The service reads the file, checks owner + size, validates,
-  then deletes it.
-- **Recommendation:** keep as a fallback. The JSON-over-IPC path is simpler and already
-  exercised by the platform, so prefer it unless live testing shows a parsing problem.
+`tailscale file cp` requires the local user to be the daemon **operator**. If a
+send fails with `Access denied: file access denied`, run once:
 
----
+```sh
+sudo tailscale set --operator=$USER
+```
 
-## Open questions — status
-
-- **Task 0 (payload decoding) — RESOLVED.** Confirmed against the installed daemon:
-  `noctalia msg plugin … all taildrop_send '<json>'` delivers the JSON object to `onIpc`
-  as a decoded table. The service keeps a decode guard for the string-arrival case.
-- **Service opens its own panel — CONFIRMED** via `noctalia.togglePanel`.
-- **`<target>:` hostname — CONFIRMED** (reaches the address/permission layer).
-- **Prerequisite / blocker:** `tailscale file cp` needs the local daemon operator set to
-  the current user; one-time `sudo tailscale set --operator=ian`.
-- **Directories / remote paths:** rejected (regular files only for the MVP).
-- **HyprFM `types`:** `["*"]`; a multi-select spawns a helper per file (documented).
-- Confirm `noctalia.togglePanel` from a service reliably brings the panel forward (not
-  just toggling it off if it was already open) so a send flow isn't interrupted.
-- Confirm `tailscale file cp <target>:` accepts the hostname emitted by `--targets`
-  (live test at send time; it should, given the `--targets` output format).
-- Decide whether `paths` should exclude directories or support them; Taildrop can send
-  folders, but the HP plan's MVP is one regular file.
-- Settle the `types` filter for the HyprFM action (`"*"`, `"dir"`, or a MIME pattern)
-  and how a directory or remote/rclone URI is surfaced to the user.
+This is a local daemon setting; it does not change tailnet policy.
 
 ---
 
-## Related
+## Open questions / notes
 
-- Plugin plan: `plan-tailscale-taildrop.md`
-- HyprFM plan: `hyperfm-taildrop/plan-hyprfm-taildrop.md`
-- HyprFM behavior that shapes this (verified in `fileoperations.cpp`): the context menu runs
-  the action **once per selected file**, passes one path via `%f` as a discrete argv
-  element (no shell), `%F` is equivalent to `%f`, and the process is detached.
+- **`noctalia.togglePanel` toggles closed.** Verified empirically (only
+  `noctalia.togglePanel` exists in the plugin API — `openPanel`/`closePanel` are
+  not exposed). The bridge therefore uses the CLI `noctalia msg panel-open`, which
+  is non-toggle.
+- **Directories are rejected** (`tailscale file cp` is files-only). A future v2
+  could archive-on-send (`folder.tar.gz`).
+- **One dialog per burst.** The 2s coalescing window merges concurrent
+  once-per-file invocations. A file manager that passes all selected paths in one
+  invocation (Nautilus/Dolphin/Thunar) already yields a single request.

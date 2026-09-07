@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""noctalia-taildrop — send a file to a device via the Tailscale plugin picker.
+"""noctalia-taildrop — send selected files to a Tailscale device.
 
-Invoked from a file manager (e.g. HyprFM) with a single file path (substituted
-for %f). Validates the file, then hands it to the Tailscale plugin (Noctalia) as
-a structured send request so the user picks a destination before anything is
-sent. No shell is used so paths with spaces / quotes / newlines stay intact.
+Invoked from a file manager with one or more absolute file paths (substituted
+for %f / %F / $selected-file-paths / etc.). Validates every file, then hands
+them to the Taildrop plugin (Noctalia) as a single structured send request so
+the user picks a destination before anything is sent. No shell is used, so
+paths with spaces / quotes / newlines stay intact.
 
 Exit codes: 0 dispatched, 1 local validation/runtime error.
 """
@@ -14,9 +15,11 @@ import subprocess
 import sys
 import uuid
 
-PLUGIN_ENTRY = "davemhammer/tailscale:service"
+PLUGIN_ENTRY = "carlocamacho/taildrop:service"
+PANEL_ID = "carlocamacho/taildrop:send"
 EVENT = "taildrop_send"
 MAX_PATH = 4096
+MAX_PATHS = 32
 
 
 def fail(msg):
@@ -24,28 +27,40 @@ def fail(msg):
     return 1
 
 
-def main(argv):
-    if len(argv) != 2:
-        return fail("usage: noctalia-taildrop <absolute-file-path>")
-    raw = argv[1]
-
-    path = os.path.abspath(raw)
-    if path != raw and not os.path.isabs(raw):
-        return fail(f"path is not absolute: {raw}")
+def validate(item):
+    path = os.path.abspath(item)
+    if path != item and not os.path.isabs(item):
+        return None, f"path is not absolute: {item}"
     if len(path) > MAX_PATH:
-        return fail("path too long")
+        return None, "path too long"
     if not os.path.exists(path):
-        return fail(f"not found: {path}")
+        return None, f"not found: {path}"
     if not (os.path.isfile(path) or os.path.isdir(path)):
-        return fail(f"not a file or folder: {path}")
+        return None, f"not a file or folder: {path}"
     if not os.access(path, os.R_OK):
-        return fail(f"not readable: {path}")
+        return None, f"not readable: {path}"
+    return path, None
+
+
+def main(argv):
+    raw = argv[1:]
+    if not raw:
+        return fail("usage: noctalia-taildrop <absolute-file-path> [more absolute file paths ...]")
+    if len(raw) > MAX_PATHS:
+        return fail(f"too many paths (max {MAX_PATHS})")
+
+    paths = []
+    for item in raw:
+        path, err = validate(item)
+        if err is not None:
+            return fail(err)
+        paths.append(path)
 
     payload = {
         "v": 1,
         "requestId": str(uuid.uuid4()),
-        "paths": [path],
-        "origin": "hyprfm",
+        "paths": paths,
+        "origin": "file_manager",
     }
     cmd = ["noctalia", "msg", "plugin", PLUGIN_ENTRY, "all", EVENT, json.dumps(payload)]
     try:
@@ -55,6 +70,16 @@ def main(argv):
     if r.returncode != 0:
         detail = (r.stderr or r.stdout or "").strip()
         return fail(f"dispatch failed: {detail or r.returncode}")
+
+    # Open (or bring forward) the send dialog. `panel-open` is idempotent and
+    # never toggles an already-open panel closed, unlike the plugin's own
+    # togglePanel. Best-effort: the request has already been dispatched.
+    try:
+        subprocess.run(["noctalia", "msg", "panel-open", PANEL_ID],
+                       check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        pass
+
     return 0
 
 
