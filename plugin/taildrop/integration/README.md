@@ -26,7 +26,7 @@ the path if you installed it elsewhere.
 
 ## HyprFM
 
-Append the block from [`hyprfm/context-menu.toml`](../hyprfm/context-menu.toml) to
+Append the block from [`hyprfm/context-menu.toml`](./hyprfm-context-menu.toml) to
 `~/.config/hyprfm/config.toml`:
 
 ```toml

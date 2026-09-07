@@ -10,8 +10,10 @@ version = "1.0.0"
 plugin_api = 10
 author = "carlocamacho"
 license = "MIT"
-dependencies = ["tailscale"]
-tags = ["utility", "network", "panel", "service"]
+# External commands the plugin shells out to. `tar` + `mktemp` are only used
+# when sending a folder (archived to .tar.gz at send time).
+dependencies = ["tailscale", "tar", "mktemp"]
+tags = ["utility", "network", "productivity", "panel", "service"]
 description = "Pick a device and send a file via Taildrop from a file manager right-click menu."
 
 [[setting]]
