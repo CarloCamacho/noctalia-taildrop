@@ -81,6 +81,9 @@ matching, in-progress job is coalesced rather than re-opened.
 
 - **Trusted, unsandboxed plugin.** It runs as the local user and can read/write files and
   spawn processes. Review the code before installing.
+- **License:** MIT. The Tailscale mark in the dialog is the [Simple Icons](https://simpleicons.org)
+  glyph (CC0), shown as a brand cue — this project is not affiliated with or endorsed by
+  Tailscale or Noctalia.
 - **Spawns processes:** `tailscale file cp`, `tailscale file cp --targets`, and (for
   folders) `tar` + `mktemp`.
 - **Filesystem:** writes a private temp dir (`mktemp -d`, mode 0700) when archiving folders,
