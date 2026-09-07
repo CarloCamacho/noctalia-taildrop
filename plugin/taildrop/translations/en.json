@@ -14,6 +14,8 @@
     "auto_close": "Closing automatically…",
     "cancel": "Cancel",
     "done": "Done",
+    "file": "File:",
+    "folder": "Folder:",
     "files": "Sending {n} item(s)",
     "loading": "Finding eligible devices…",
     "pick": "Choose a device to send to:",

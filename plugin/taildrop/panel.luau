@@ -82,7 +82,15 @@ end
 local function filesRows()
   local rows = {}
   for _, f in ipairs(transfer.paths or {}) do
-    table.insert(rows, ui.label({ text = f, maxLines = 2, fontSize = 12, color = "on_surface_variant" }))
+    local info = noctalia.fileInfo(f)
+    local isDir = type(info) == "table" and info.isDir == true
+    local prefix = isDir and tr("send.folder") or tr("send.file")
+    table.insert(rows, ui.label({
+      text = prefix .. " " .. f,
+      maxLines = 2,
+      fontSize = 12,
+      color = "on_surface_variant",
+    }))
   end
   return rows
 end
