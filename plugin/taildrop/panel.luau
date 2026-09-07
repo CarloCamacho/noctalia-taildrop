@@ -109,8 +109,8 @@ local function toolbar()
       }),
       ui.label({ text = msg, flexGrow = 1, maxLines = 3, color = color }),
     }))
-    -- Failed sends stay open (with Done) so the error is readable; a successful
-    -- or cancelled send closes itself after a moment to let the result sink in.
+    -- Failed sends stay open with a Retry so you can re-run the same send; a
+    -- successful (or cancelled) send closes itself shortly after.
     if phase ~= "failed" then
       table.insert(items, ui.label({
         text = tr("send.auto_close"),
@@ -120,7 +120,8 @@ local function toolbar()
     end
     if phase == "failed" then
       table.insert(items, ui.row({ gap = 6 }, {
-        ui.button({ text = tr("send.done"), glyph = "x", variant = "primary", onClick = "onDismissSend" }),
+        ui.button({ text = tr("send.retry"), glyph = "refresh", variant = "primary", onClick = "onRetrySend" }),
+        ui.button({ text = tr("send.done"), glyph = "x", variant = "ghost", onClick = "onDismissSend" }),
       }))
     end
   else
@@ -258,6 +259,10 @@ end
 function onCancelSend()
   send("taildrop_cancel", { jobId = transfer.requestId })
   panel.close()
+end
+
+function onRetrySend()
+  send("taildrop_retry", { jobId = transfer.requestId })
 end
 
 function onDismissSend()

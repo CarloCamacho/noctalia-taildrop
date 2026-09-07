@@ -10,8 +10,8 @@ want the VPN manager / peers / exit-node UI.
 It ships a purpose-built **send dialog** — a single Noctalia panel that lists eligible Taildrop
 destinations and requires an explicit confirm before anything leaves your machine.
 
-> Files only, by design — `tailscale file cp` does not support directories (see
-> [Limitations](#limitations)).
+> Files are sent as-is; **folders are auto-archived to a `.tar.gz`** at send time (since
+> `tailscale file cp` only accepts files). See [Limitations](#limitations).
 
 ---
 
@@ -42,7 +42,8 @@ destinations and requires an explicit confirm before anything leaves your machin
 | File manager right-click → **Send via Taildrop…** | Opens the Taildrop send dialog with your file(s) pre-loaded |
 | In the dialog | Choose an eligible device, review file(s) + destination, confirm |
 | After confirm | Runs `tailscale file cp <file> <device>:` and shows the result |
-| Folders | Not supported — you get a clear notification instead of a silent no-op |
+| Folders | Archived to `<name>.tar.gz` in a private temp dir, sent, then cleaned up |
+| Send fails | The dialog stays open with the error — **Retry** re-sends to the same device |
 
 ## How it works
 
@@ -56,6 +57,7 @@ File manager right-click
                       └─ the send dialog lists eligible destinations
                            └─ you pick a device and confirm
                                 └─ service runs `tailscale file cp <file> <device>:`
+                                   (directories are archived to .tar.gz first)
 ```
 
 - The bridge never shells out — paths cross the boundary as discrete argv elements and a JSON
@@ -71,6 +73,7 @@ File manager right-click
 - [Noctalia](https://noctalia.dev)
 - Optional but the whole point: a file manager (HyprFM, Nautilus, Dolphin, Thunar, …)
 - `python3` for the bridge helper
+- `tar` and `mktemp` on `PATH` — only used when you send a folder (default on Linux/macOS)
 - The local user must be a **Tailscale daemon operator** (see step 4)
 
 ## Installation
@@ -182,15 +185,16 @@ noctalia msg panel-open carlocamacho/taildrop:send
 (`choosing|confirming|sending|succeeded|failed|cancelled`), `status`, `error`, `eligible`,
 timestamps, `revision`.
 
-The service rejects requests that are malformed, non-absolute, or point at a directory — bounds
-are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path).
+The service rejects requests that are malformed, non-absolute, or over-limit — bounds
+are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path). Directories are allowed and archived
+at send time.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 | --- | --- |
 | `Access denied: file access denied` when sending | Run `sudo tailscale set --operator=$USER` once |
-| Folder right-click does nothing / shows a notice | Folders aren't supported by `tailscale file cp`; archive it first |
+| Folder send takes a while / temp files linger | Folders are archived with `tar` (needs `tar` + `mktemp`). Temp files are removed after the send |
 | Dialog opens but no devices listed | `tailscale file cp --targets` returned nothing (no eligible devices, or daemon down) |
 | "Send via Taildrop…" not in the menu | Restart the file manager; confirm the config block and helper path |
 | Plugin not loaded from your copy | Check `noctalia msg plugins list` shows your path source, and the folder is named `taildrop` |
@@ -199,8 +203,9 @@ are enforced (≤ 32 paths, ≤ 8 KiB, ≤ 4096 bytes/path).
 
 ## Limitations
 
-- **Files only.** `tailscale file cp` rejects directories. A future v2 could archive-on-send
-  (send `folder.tar.gz`).
+- **Folders are archived, not sent as-is.** A directory is packed to `<name>.tar.gz` in a private
+temp dir (`mktemp -d`, mode 0700), sent, then deleted. Requires `tar` and `mktemp` (present on
+Linux/macOS). Very large folders take time to compress and use temporary disk space.
 - **No receive flow.** Receiving (`tailscale file get`) is out of scope for this repo.
 - Offline/`offline, last seen …` peers are listed but a send may fail; eligibility is the CLI's
   call, not the plugin's.

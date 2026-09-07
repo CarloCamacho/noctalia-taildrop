@@ -172,9 +172,7 @@ local function validateSendRequest(payload)
     if info == nil then
       return nil, "path not found: " .. s
     end
-    if info.isDir then
-      return nil, "Folders can't be sent with Taildrop (archive it first)."
-    end
+    -- Directories are allowed; they are archived to a .tar.gz at send time.
     table.insert(validated, s)
   end
   return { requestId = rid, paths = validated, origin = tostring(payload.origin or "") }, nil
@@ -195,25 +193,72 @@ local function setResult(command, ok, message, extra)
   noctalia.state.set(RESULT_KEY, result)
 end
 
-local function executeTaildropConfirm(command)
-  local rid = tostring(command.jobId or command.requestId or "")
-  if type(transfer) ~= "table" or transfer.requestId ~= rid then
-    setResult(command, false, noctalia.tr("result.no_job"))
+-- Archive directories into a private temp dir, then report the final send
+-- list (files + archives) plus the temp dir to clean up afterwards.
+-- callback(files, tmpdir|nil, err|nil)
+local function buildSendList(files, dirs, callback)
+  if #dirs == 0 then
+    callback(files, nil, nil)
     return
   end
+  noctalia.runAsync("mktemp -d", function(res)
+    if not res or res.exitCode ~= 0 or trim(res.stdout or "") == "" then
+      callback(nil, nil, "could not create a temporary directory")
+      return
+    end
+    local tmpdir = trim(res.stdout or "")
+    local archives = {}
+    local remaining = #dirs
+    local doneErr = nil
+    for _, d in ipairs(dirs) do
+      local name = d:match("([^/]+)$") or "folder"
+      local parent = d:match("^(.*)/[^/]+$")
+      if parent == nil or parent == "" then
+        parent = "/"
+      end
+      local archive = tmpdir .. "/" .. name .. ".tar.gz"
+      noctalia.runAsync(shellCommand({ "tar", "czf", archive, "-C", parent, name }), function(r)
+        if r and r.exitCode == 0 and noctalia.fileInfo(archive) ~= nil then
+          table.insert(archives, archive)
+        else
+          local err = trim(r and (r.stderr ~= "" and r.stderr or r.stdout) or "archive failed")
+          doneErr = err ~= "" and err or "archive failed"
+        end
+        remaining -= 1
+        if remaining == 0 then
+          if doneErr ~= nil then
+            noctalia.runAsync(shellCommand({ "rm", "-rf", tmpdir }))
+            callback(nil, nil, doneErr)
+          else
+            local all = {}
+            for _, f in ipairs(files) do
+              table.insert(all, f)
+            end
+            for _, a in ipairs(archives) do
+              table.insert(all, a)
+            end
+            callback(all, tmpdir, nil)
+          end
+        end
+      end, 600000)
+    end
+  end, 10000)
+end
+
+-- Run `tailscale file cp` for the current transfer job, archiving any
+-- directories first. `command` is the originating panel command (for panel
+-- feedback); `rid` is the job id it must still match.
+local function performSend(command, rid)
   if busy then
     setResult(command, false, noctalia.tr("result.busy"))
     return
   end
-  local target = trim(command.target or "")
-  if target == "" then
-    setResult(command, false, noctalia.tr("result.no_target"))
-    return
-  end
 
-  -- Re-validate that each file still exists before sending.
+  -- Re-validate that each path still exists before sending; split files/dirs.
+  local files, dirs = {}, {}
   for _, p in ipairs(transfer.paths or {}) do
-    if noctalia.fileInfo(p) == nil then
+    local info = noctalia.fileInfo(p)
+    if info == nil then
       transfer.phase = "failed"
       transfer.error = "path no longer exists: " .. p
       transfer.updatedAt = nowSec()
@@ -222,10 +267,14 @@ local function executeTaildropConfirm(command)
       setResult(command, false, transfer.error)
       return
     end
+    if info.isDir then
+      table.insert(dirs, p)
+    else
+      table.insert(files, p)
+    end
   end
 
   busy = true
-  transfer.target = target
   transfer.phase = "sending"
   transfer.status = ""
   transfer.updatedAt = nowSec()
@@ -233,40 +282,94 @@ local function executeTaildropConfirm(command)
   publishTransfer()
   publishSnapshot()
 
-  local bin = tsBin()
-  local full = { bin, "file", "cp" }
-  for _, p in ipairs(transfer.paths or {}) do
-    table.insert(full, p)
-  end
-  table.insert(full, target .. ":")
+  local target = transfer.target
 
-  runTs(full, function(result)
-    if type(transfer) ~= "table" or transfer.requestId ~= rid then
+  buildSendList(files, dirs, function(sendList, tmpdir, err)
+    if sendList == nil then
+      busy = false
+      transfer.phase = "failed"
+      transfer.error = err or "send failed"
+      transfer.updatedAt = nowSec()
+      transfer.revision += 1
+      publishTransfer()
+      publishSnapshot()
+      noctalia.notifyError(noctalia.tr("title"), noctalia.tr("result.failed", { error = transfer.error }))
+      setResult(command, false, transfer.error)
       return
     end
-    busy = false
-    transfer.updatedAt = nowSec()
-    transfer.revision += 1
-    if result and result.exitCode == 0 then
-      transfer.phase = "succeeded"
-      transfer.status = noctalia.tr("result.sent")
-      transfer.error = ""
-      noctalia.notify(
-        noctalia.tr("title"),
-        noctalia.tr("result.sent_to", { n = #(transfer.paths or {}), target = target })
-      )
-    else
-      local err = trim(result and (result.stderr ~= "" and result.stderr or result.stdout) or "send failed")
-      if err == "" then
-        err = "send failed"
-      end
-      transfer.phase = "failed"
-      transfer.error = err
-      noctalia.notifyError(noctalia.tr("title"), noctalia.tr("result.failed", { error = err }))
+
+    local bin = tsBin()
+    local full = { bin, "file", "cp" }
+    for _, p in ipairs(sendList) do
+      table.insert(full, p)
     end
-    publishTransfer()
-    publishSnapshot()
-  end, 1200000)
+    table.insert(full, target .. ":")
+
+    runTs(full, function(result)
+      if type(transfer) ~= "table" or transfer.requestId ~= rid then
+        if tmpdir ~= nil then
+          noctalia.runAsync(shellCommand({ "rm", "-rf", tmpdir }))
+        end
+        return
+      end
+      busy = false
+      transfer.updatedAt = nowSec()
+      transfer.revision += 1
+      if result and result.exitCode == 0 then
+        transfer.phase = "succeeded"
+        transfer.status = noctalia.tr("result.sent")
+        transfer.error = ""
+        noctalia.notify(
+          noctalia.tr("title"),
+          noctalia.tr("result.sent_to", { n = #transfer.paths, target = target })
+        )
+      else
+        local err = trim(result and (result.stderr ~= "" and result.stderr or result.stdout) or "send failed")
+        if err == "" then
+          err = "send failed"
+        end
+        transfer.phase = "failed"
+        transfer.error = err
+        noctalia.notifyError(noctalia.tr("title"), noctalia.tr("result.failed", { error = err }))
+      end
+      publishTransfer()
+      publishSnapshot()
+      if tmpdir ~= nil then
+        noctalia.runAsync(shellCommand({ "rm", "-rf", tmpdir }))
+      end
+    end, 1200000)
+  end)
+end
+
+local function executeTaildropConfirm(command)
+  local rid = tostring(command.jobId or command.requestId or "")
+  if type(transfer) ~= "table" or transfer.requestId ~= rid then
+    setResult(command, false, noctalia.tr("result.no_job"))
+    return
+  end
+  local target = trim(command.target or "")
+  if target == "" then
+    setResult(command, false, noctalia.tr("result.no_target"))
+    return
+  end
+  transfer.target = target
+  transfer.updatedAt = nowSec()
+  transfer.revision += 1
+  publishTransfer()
+  performSend(command, rid)
+end
+
+local function executeTaildropRetry(command)
+  local rid = tostring(command.jobId or command.requestId or "")
+  if type(transfer) ~= "table" or transfer.requestId ~= rid then
+    setResult(command, false, noctalia.tr("result.no_job"))
+    return
+  end
+  if transfer.target == "" then
+    setResult(command, false, noctalia.tr("result.no_target"))
+    return
+  end
+  performSend(command, rid)
 end
 
 local function executeTaildropCancel(command)
@@ -308,6 +411,8 @@ local function executeAction(command)
   local action = command.action
   if action == "taildrop_confirm" then
     executeTaildropConfirm(command)
+  elseif action == "taildrop_retry" then
+    executeTaildropRetry(command)
   elseif action == "taildrop_cancel" then
     executeTaildropCancel(command)
   elseif action == "taildrop_dismiss" then

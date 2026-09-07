@@ -44,7 +44,7 @@ table.
 | --- | --- | --- |
 | `v` | int | `= 1` (contract version) |
 | `requestId` | string | ASCII `[A-Za-z0-9._-]`, length 1..64, unique per request; correlation only |
-| `paths` | string[] | 1..32 entries; each an **absolute**, **regular-file** path, ≤4096 bytes |
+| `paths` | string[] | 1..32 entries; each an **absolute** path to a file or directory, ≤4096 bytes |
 | `origin` | string (optional) | informational, not trusted (bridge sends `"file_manager"`) |
 
 **Bounds (validated in the service):** `paths` count ∈ `1..32`, total JSON ≤ 8 KiB.
@@ -86,13 +86,19 @@ The service writes a shared job that the dialog watches.
 4. **Dialog** watches `taildrop_transfer`. If a job is active it renders the file
    list + eligible destinations. The user selects a destination → confirm/cancel.
 5. **Confirm** → dialog sets `taildrop_command = { action = "taildrop_confirm", jobId, target }`.
-6. **Service** `taildrop_confirm`:
+6. **Service** `taildrop_confirm` (also used by `taildrop_retry`):
    - Re-validate each path still exists; abort with a clear error otherwise.
+   - Directories are **archived** to `<name>.tar.gz` in a private temp dir
+     (`mktemp -d`, 0700) via `tar czf`, replaced in the send list, and removed
+     after the send (success or failure).
    - Run `tailscale file cp <paths…> <target>:` as an argv vector (each element
      shell-quoted; no raw concatenation).
    - `phase=sending` → `succeeded`/`failed`; notify; bump `taildrop_transfer`.
 7. **Cancel** → `phase=cancelled`; **Done** → `phase` cleared (job emptied) and
-   the dialog closes.
+   the dialog closes. On `failed`, the dialog stays open with a **Retry** action
+   (`taildrop_retry`, same `jobId`) that re-runs the send to the same target.
+
+> Archiving requires `tar` and `mktemp` on `PATH` (present on Linux/macOS).
 
 ---
 
@@ -101,8 +107,9 @@ The service writes a shared job that the dialog watches.
 - **No shell** anywhere: the bridge uses `subprocess` with an argv list; the
   service builds argv with `shellQuote`/`shellCommand` and `noctalia.runAsync`.
 - Paths are **data**, never interpolated into a command string.
-- Payload is bounded; non-table / over-limit / non-absolute / non-regular-file
-  requests are rejected without side effects.
+- Payload is bounded; non-table / over-limit / non-absolute requests are
+  rejected without side effects. Directories are allowed but only sent after
+  being archived, and the archive is cleaned up afterwards.
 - `requestId` is charset/length-validated and used only for correlation.
 - Eligibility comes from `tailscale file cp --targets`; no tailnet permission
   change makes a destination appear.
@@ -128,8 +135,8 @@ This is a local daemon setting; it does not change tailnet policy.
   `noctalia.togglePanel` exists in the plugin API — `openPanel`/`closePanel` are
   not exposed). The bridge therefore uses the CLI `noctalia msg panel-open`, which
   is non-toggle.
-- **Directories are rejected** (`tailscale file cp` is files-only). A future v2
-  could archive-on-send (`folder.tar.gz`).
+- **Directories are auto-archived** (`folder.tar.gz`) at send time, cleaned up
+after. Large archives use temp disk + CPU.
 - **One dialog per burst.** The 2s coalescing window merges concurrent
   once-per-file invocations. A file manager that passes all selected paths in one
   invocation (Nautilus/Dolphin/Thunar) already yields a single request.
