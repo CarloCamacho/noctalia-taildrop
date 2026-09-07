@@ -138,6 +138,10 @@ This is a local daemon setting; it does **not** change tailnet policy or who may
 3. Pick a destination; the destination + filename(s) are visible before you send.
 4. Confirm — a notification reports success or a real CLI error.
 
+After a **successful** send the dialog closes on its own after a couple of seconds (the
+result notification is what you'll see). A **failed** send stays open with the error so you can
+read it — press **Done** to dismiss.
+
 ## File managers
 
 The bridge accepts **one or more** absolute path arguments. Pass all selected files at once
@@ -221,5 +225,7 @@ tests/             bridge tests
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Noctalia is a registered trademark of its respective owners; this
-project is not affiliated with or endorsed by Noctalia or Tailscale.
+MIT — see [LICENSE](LICENSE). Noctalia and Tailscale are registered trademarks of their
+respective owners; this project is not affiliated with or endorsed by either. The Tailscale mark
+shown in the dialog is the [Simple Icons](https://simpleicons.org) glyph (CC0), used as an
+informative brand cue, not an endorsement.

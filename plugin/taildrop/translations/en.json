@@ -11,6 +11,7 @@
     "not_installed": "tailscale is not installed or not on PATH."
   },
   "send": {
+    "auto_close": "Closing automatically…",
     "cancel": "Cancel",
     "done": "Done",
     "files": "Sending {n} file(s)",

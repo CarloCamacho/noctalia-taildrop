@@ -15,6 +15,7 @@ local feedback = ""
 local feedbackError = false
 local dirty = true
 local requestCounter = 0
+local autoCloseTicks = 0 -- counts down after a successful send, then closes
 
 local function tr(key, subst)
   return noctalia.tr(key, subst)
@@ -96,7 +97,7 @@ local function toolbar()
       ui.label({ text = tr("send.sending", { target = transfer.target or "…" }), flexGrow = 1, maxLines = 2 }),
     }))
   elseif phase == "succeeded" or phase == "failed" or phase == "cancelled" then
-    local msg = (phase == "succeeded" and tr("send.sent"))
+    local msg = (phase == "succeeded" and tr("result.sent_to", { n = #(transfer.paths or {}), target = transfer.target or "" }))
       or (phase == "failed" and (transfer.error ~= "" and transfer.error or "send failed"))
       or tr("result.cancelled")
     local color = (phase == "failed") and "error" or (phase == "succeeded" and "primary" or "on_surface_variant")
@@ -108,9 +109,20 @@ local function toolbar()
       }),
       ui.label({ text = msg, flexGrow = 1, maxLines = 3, color = color }),
     }))
-    table.insert(items, ui.row({ gap = 6 }, {
-      ui.button({ text = tr("send.done"), glyph = "x", variant = "primary", onClick = "onDismissSend" }),
-    }))
+    -- Failed sends stay open (with Done) so the error is readable; a successful
+    -- or cancelled send closes itself after a moment to let the result sink in.
+    if phase ~= "failed" then
+      table.insert(items, ui.label({
+        text = tr("send.auto_close"),
+        color = "on_surface_variant",
+        fontSize = 11,
+      }))
+    end
+    if phase == "failed" then
+      table.insert(items, ui.row({ gap = 6 }, {
+        ui.button({ text = tr("send.done"), glyph = "x", variant = "primary", onClick = "onDismissSend" }),
+      }))
+    end
   else
     local sel = selectedTarget()
     table.insert(items, ui.label({ text = tr("send.files", { n = #(transfer.paths or {}) }), color = "on_surface_variant", fontSize = 12 }))
@@ -150,7 +162,12 @@ local function render()
 
   panel.render(ui.column({ flexGrow = 1, gap = 10, align = "stretch" }, {
     ui.row({ align = "center", gap = 10 }, {
-      ui.glyph({ name = "world-upload", size = 22, color = "primary" }),
+      ui.image({
+        path = snapshot.available == false and "assets/tailscale-grey.png" or "assets/tailscale-green.png",
+        width = 22,
+        height = 22,
+        fit = "contain",
+      }),
       ui.label({ text = tr("title"), fontSize = 18, fontWeight = "bold", flexGrow = 1 }),
       ui.button({ glyph = "close", variant = "ghost", onClick = "onClosePanel" }),
     }),
@@ -203,6 +220,8 @@ noctalia.state.watch(TRANSFER_KEY, function(value)
     shownJobId = ""
     targetSelection = ""
   end
+  -- Auto-close after a successful send; keep failures open for inspection.
+  autoCloseTicks = (transfer.phase == "succeeded") and 2 or 0
   dirty = true
 end)
 
@@ -216,6 +235,12 @@ end
 function update()
   if dirty then
     render()
+  end
+  if autoCloseTicks > 0 then
+    autoCloseTicks = autoCloseTicks - 1
+    if autoCloseTicks == 0 and transfer.phase == "succeeded" then
+      panel.close()
+    end
   end
 end
 
