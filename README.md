@@ -10,6 +10,9 @@ exit-node UI.
 It ships a purpose-built **send dialog** — a single Noctalia panel that lists eligible Taildrop
 destinations and requires an explicit confirm before anything leaves your machine.
 
+> ✅ Published on the Noctalia community plugin store as `carlocamacho/taildrop` (v1.0.0). Install it
+> directly from Noctalia's community source; this repo is the upstream source of truth.
+
 > Files are sent as-is; **folders are auto-archived to a `.tar.gz`** at send time (since
 > `tailscale file cp` only accepts files). See [Limitations](#limitations).
 

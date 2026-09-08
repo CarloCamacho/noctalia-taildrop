@@ -7,6 +7,9 @@ existing Tailscale connection; nothing leaves your tailnet.
 `tailscale file cp` only accepts files, so directories are packed to `<name>.tar.gz` in a
 private temp directory at send time and cleaned up afterwards.
 
+> Published on the Noctalia community plugin store. See [CHANGELOG.md](CHANGELOG.md) for release
+> notes.
+
 ## Plugin
 
 | Field | Value |
